@@ -58,7 +58,9 @@ using TracyMetalCtx = void;
 #endif
 
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 
 #include "Tracy.hpp"
 #include "../client/TracyProfiler.hpp"
@@ -355,9 +357,35 @@ private:
     ~MetalCtx()
     {
         // collect the last remnants of Metal GPU activity...
-        // TODO: add a timeout to this loop?
-        while (m_previousCheckpoint.load() != m_queryCounter.load())
-            Collect();
+        // give up if the pending queries stop resolving
+        auto lastProgress = std::chrono::high_resolution_clock::now();
+        uintptr_t checkpoint = m_previousCheckpoint.load();
+        while (checkpoint != m_queryCounter.load())
+        {
+#ifdef TRACY_ON_DEMAND
+            // Collect() resolves nothing while disconnected
+            if (!GetProfiler().IsConnected())
+            {
+                break;
+            }
+#endif
+            if (!Collect())
+            {
+                break;
+            }
+            auto now = std::chrono::high_resolution_clock::now();
+            if (m_previousCheckpoint.load() != checkpoint)
+            {
+                checkpoint = m_previousCheckpoint.load();
+                lastProgress = now;
+            }
+            else if (std::chrono::duration<float>(now-lastProgress).count() > TRACY_METAL_TIMESTAMP_COLLECT_TIMEOUT + 1.0f)
+            {
+                TracyMetalPanic(, "~MetalCtx: giving up on %u pending timestamp queries.", RingCount(checkpoint, m_queryCounter.load()));
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
 
     tracy_force_inline void SubmitQueueItem(QueueItem* item)
