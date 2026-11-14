@@ -1898,6 +1898,45 @@ You may also use \texttt{TracyMetalZoneC(name, encoderDescriptor, color)} to spe
 
 You are required to periodically collect the GPU events using the \texttt{TracyMetalCollect(ctx)} macro. Good places for collection are: after synchronous waits, after present drawable calls, and inside the completion handler of command buffers.
 
+\subsubsection{Metal 4}
+\label{gpumetal4}
+
+To enable Metal 4 support, include the \texttt{public/tracy/TracyMetal4.hmm} header file, and create a \texttt{tracy::Metal4Ctx} object with the \texttt{TracyMetal4Context(device, queue)} macro, where \texttt{queue} is the \texttt{MTL4CommandQueue} that the profiled command buffers are committed to. The object should later be cleaned up with the \texttt{TracyMetal4Destroy(ctx)} macro. To set a custom name for the context, use the \texttt{TracyMetal4ContextName(ctx, name, size)} macro. The header file \texttt{TracyMetal4.hmm} is intended to be included by \textbf{Objective-C} code, and Objective-C Automatic Reference Counting (ARC) support is required. Metal 4 requires macOS 26 or iOS 26, and an Apple GPU that belongs to the Apple7 family or newer.
+
+To mark a GPU zone use the \texttt{TracyMetal4Zone(ctx, target, name)} macro, where \texttt{name} is a string literal name of the zone and \texttt{target} is an \texttt{MTL4CommandBuffer}, an \texttt{MTL4ComputeCommandEncoder}, or an \texttt{MTL4RenderCommandEncoder}. Alternatively you may use \texttt{TracyMetal4ZoneC(ctx, target, name, color)} to specify zone color.
+
+Unlike the Metal back-end, a Metal 4 zone does not take a pass descriptor, as Metal 4 writes timestamps on demand from a command buffer or from a command encoder. The zone writes one timestamp where it begins and another one where it ends, and the kind of \texttt{target} determines where the zone may be placed:
+
+\begin{itemize}
+\item A command buffer zone must begin and end while the command buffer has no open command encoder. Place it around the creation and the \texttt{endEncoding} call of one or more encoders. Metal captures these timestamps after the work that precedes them in the command buffer is complete. Metal does not document this requirement: its API validation asserts when a command buffer zone is placed inside an encoder, and without the validation the process was observed to crash once the encoder ended.
+\item A compute or render command encoder zone must begin and end while its encoder is open. Metal treats the granularity of these timestamps as a hint, and it only guarantees that the work prior to a timestamp has finished. Prefer command buffer zones, for the reasons listed in the caveats below.
+\end{itemize}
+
+The zone must not outlive its command buffer or command encoder.
+
+You are required to periodically collect the GPU events using the \texttt{TracyMetal4Collect(ctx)} macro. It should be called after the command buffers that hold the zones have been committed to the command queue, for example once per frame, after the last commit. The collection signals a shared event through the command queue in order to know which timestamps the GPU has already written, so the zones of a command buffer are reported by a subsequent call, and not by the one that immediately follows the commit. A zone that has not ended yet holds back the zones that follow it. So does a zone whose timestamps have not been written by then, until its command buffer is committed or a timeout expires (200~\si{\milli\second} after the zone has ended), in which case the zone is reported with no duration.
+
+Metal limits a process to 32 counter heaps. Each context reserves two of them for its timestamp queries, which is enough for 4096 zones to be pending collection. A zone that is requested beyond this limit is not recorded, and a message that says so is sent to the profiler. You can change the number of heaps (up to 16) by defining the \texttt{TRACY\_METAL4\_HEAP\_COUNT} macro before including the header file. The macro must have the same value in every translation unit that includes the header file.
+
+\begin{bclogo}[
+noborder=true,
+couleur=black!5,
+logo=\bcattention
+]{Caveats}
+\begin{itemize}
+\item The back-end has only been tested on an Apple M1 Max. The remaining caveats describe what was observed on it.
+\item The timestamps written within a single compute command encoder resolved to the same value, which leaves the zone with no duration (Tracy does not include such zones in the statistics).
+\item The zones recorded in a single render command encoder resolved to nearly the same span, with a common end timestamp, so a zone that holds only some of the draw calls of its encoder does not measure them.
+\item Metal documents that a timestamp written by a render command encoder before any draw call is taken before the requested render stage begins. Such a timestamp was earlier than the end of the previous encoders of the same command buffer.
+\item A command encoder zone could begin before the command buffer zone that encloses it.
+\item The end of a zone was never written when its render command encoder recorded no draw calls. Such zones are subject to the collection timeout described above.
+\end{itemize}
+\end{bclogo}
+
+\subparagraph{Calibrated context}
+
+A Metal 4 context is calibrated if the timestamps of its counter heaps are found to follow the device clock when the context is created, which was the case on the tested hardware.
+
 \subsubsection{OpenCL}
 \label{gpuopencl}
 
@@ -1971,13 +2010,13 @@ sudo amd-smi set -g 0 -l stable_std
 
 Putting more than one GPU zone macro in a single scope features the same issue as with the \texttt{ZoneScoped} macros, described in section~\ref{multizone} (but this time the variable name is \texttt{\_\_\_tracy\_gpu\_zone}).
 
-To solve this problem, in case of OpenGL use the \texttt{TracyGpuNamedZone} macro in place of \texttt{TracyGpuZone} (or the color variant). The same applies to Vulkan, Direct3D 11/12, Metal and WebGPU -- replace \texttt{TracyVkZone} with \texttt{TracyVkNamedZone}, \texttt{TracyD3D11Zone}/\texttt{TracyD3D12Zone} with \texttt{TracyD3D11NamedZone}/\texttt{TracyD3D12NamedZone}, \texttt{TracyMetalZone} with \texttt{TracyMetalNamedZone}, and \texttt{TracyWebGPUZone} with \texttt{TracyWebGPUNamedZone}.
+To solve this problem, in case of OpenGL use the \texttt{TracyGpuNamedZone} macro in place of \texttt{TracyGpuZone} (or the color variant). The same applies to Vulkan, Direct3D 11/12, Metal, Metal 4 and WebGPU -- replace \texttt{TracyVkZone} with \texttt{TracyVkNamedZone}, \texttt{TracyD3D11Zone}/\texttt{TracyD3D12Zone} with \texttt{TracyD3D11NamedZone}/\texttt{TracyD3D12NamedZone}, \texttt{TracyMetalZone}/\texttt{TracyMetal4Zone} with \texttt{TracyMetalNamedZone}/\texttt{TracyMetal4NamedZone}, and \texttt{TracyWebGPUZone} with \texttt{TracyWebGPUNamedZone}.
 
 Remember to provide your name for the created stack variable as the first parameter to the macros.
 
 \subsubsection{Transient GPU zones}
 
-Transient zones (see section~\ref{transientzones} for details) are available in OpenGL, Vulkan, Direct3D 11/12 and WebGPU macros. Transient zones are not available for Metal at this moment.
+Transient zones (see section~\ref{transientzones} for details) are available in OpenGL, Vulkan, Direct3D 11/12, Metal 4 and WebGPU macros. Transient zones are not available for the Metal back-end (section~\ref{gpumetal}) at this moment.
 
 \subsection{Fibers}
 \label{fibers}
@@ -2024,7 +2063,7 @@ As you can see, there are two threads, \texttt{t1} and \texttt{t2}, which are si
 \subsection{Collecting call stacks}
 \label{collectingcallstacks}
 
-Capture of true calls stacks can be performed by using macros with the \texttt{S} postfix, which require an additional parameter, specifying the depth of call stack to be captured. The greater the depth, the longer it will take to perform capture. Currently you can use the following macros: \texttt{ZoneScopedS}, \texttt{ZoneScopedNS}, \texttt{ZoneScopedCS}, \texttt{ZoneScopedNCS}, \texttt{TracyAllocS}, \texttt{TracyFreeS}, \texttt{TracyMessageS}, \texttt{TracyMessageLS}, \texttt{TracyMessageCS}, \texttt{TracyMessageLCS}, \texttt{TracyGpuZoneS}, \texttt{TracyGpuZoneCS}, \texttt{TracyVkZoneS}, \texttt{TracyVkZoneCS}, and the named and transient variants.
+Capture of true calls stacks can be performed by using macros with the \texttt{S} postfix, which require an additional parameter, specifying the depth of call stack to be captured. The greater the depth, the longer it will take to perform capture. Currently you can use the following macros: \texttt{ZoneScopedS}, \texttt{ZoneScopedNS}, \texttt{ZoneScopedCS}, \texttt{ZoneScopedNCS}, \texttt{TracyAllocS}, \texttt{TracyFreeS}, \texttt{TracyMessageS}, \texttt{TracyMessageLS}, \texttt{TracyMessageCS}, \texttt{TracyMessageLCS}, \texttt{TracyGpuZoneS}, \texttt{TracyGpuZoneCS}, \texttt{TracyVkZoneS}, \texttt{TracyVkZoneCS}, \texttt{TracyMetal4ZoneS}, \texttt{TracyMetal4ZoneCS}, and the named and transient variants.
 
 Be aware that call stack collection is a relatively slow operation. Table~\ref{CallstackTimes} and figure~\ref{CallstackPlot} show how long it took to perform a single capture of varying depth on multiple CPU architectures.
 
