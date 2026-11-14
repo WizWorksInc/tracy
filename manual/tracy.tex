@@ -1912,7 +1912,7 @@ Unlike the Metal back-end, a Metal 4 zone does not take a pass descriptor, as Me
 \item A compute or render command encoder zone must begin and end while its encoder is open. Metal treats the granularity of these timestamps as a hint, and it only guarantees that the work prior to a timestamp has finished. Prefer command buffer zones, for the reasons listed in the caveats below.
 \end{itemize}
 
-The zone must not outlive its command buffer or command encoder.
+The zone must not outlive its command buffer or command encoder. It may end on a different thread than the one it began on, but the zones that began on one thread must still end in the reverse order they began in.
 
 You are required to periodically collect the GPU events using the \texttt{TracyMetal4Collect(ctx)} macro. It should be called after the command buffers that hold the zones have been committed to the command queue, for example once per frame, after the last commit. The collection signals a shared event through the command queue in order to know which timestamps the GPU has already written, so the zones of a command buffer are reported by a subsequent call, and not by the one that immediately follows the commit. A zone that has not ended yet holds back the zones that follow it. So does a zone whose timestamps have not been written by then, until its command buffer is committed or a timeout expires (200~\si{\milli\second} after the zone has ended), in which case the zone is reported with no duration.
 

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 
 #include "tracy/Tracy.hpp"
@@ -137,6 +138,16 @@ int main( int argc, char** argv )
                 }
                 [encoder endEncoding];
             }
+
+#ifdef TRACY_ENABLE
+            {
+                auto migrating = new tracy::Metal4ZoneScope( ctx, TracyLine, TracyFile, strlen( TracyFile ), TracyFunction, strlen( TracyFunction ), "migrating pass", 14, commandBuffer, true );
+                id<MTL4ComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+                [encoder copyFromBuffer:source sourceOffset:0 toBuffer:target destinationOffset:0 size:bytes];
+                [encoder endEncoding];
+                std::thread( [migrating] { delete migrating; } ).join();
+            }
+#endif
 
             {
                 TracyMetal4ZoneTransient( ctx, drawPass, commandBuffer, ( frame & 1 ) ? "draw pass (odd)" : "draw pass (even)", true );
